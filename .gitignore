@@ -1,0 +1,13 @@
+# Data
+/audio
+/audio_convert
+/data
+/data_final
+/metadata
+/separated
+/SORTED
+/DATASET_LABELED
+# Model
+*.pt
+*.pth
+*.ckpt

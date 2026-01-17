@@ -1,0 +1,13 @@
+conda activate "E:\ONEXT\AI Research\venv"
+
+tải audio từ video:
+yt-dlp -f bestaudio link video
+
+chuyển file về dạng .wav:
+python convert_audio.py
+
+tách nhạc nền:
+demucs -n htdemucs --two-stems=vocals tênfile.wav
+
+tách thành các audio
+python tach_audio.py

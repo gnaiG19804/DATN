@@ -1,13 +1,22 @@
-conda activate "E:\ONEXT\AI Research\venv"
+E:\ONEXT\venv\Scripts\activate
 
 tải audio từ video:
-yt-dlp -f bestaudio link video
+yt-dlp -f bestaudio https://www.youtube.com/watch?v=ifR2XlGkE7g
 
 chuyển file về dạng .wav:
 python convert_audio.py
 
 tách nhạc nền:
-demucs -n htdemucs --two-stems=vocals tênfile.wav
+python demucs_pipline.py
 
 tách thành các audio
 python tach_audio.py
+
+resize về 3-5s
+python resize_audio.py
+
+tạo file mô tả .csv
+python mota.py
+
+chia nhãn dữ liệu
+python datalabeled.py

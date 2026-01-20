@@ -11,3 +11,6 @@
 *.pt
 *.pth
 *.ckpt
+
+# no
+tool.txt

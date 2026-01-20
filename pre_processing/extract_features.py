@@ -2,10 +2,15 @@ import os
 import librosa
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
+from pathlib import Path
 from tensorflow.keras.utils import to_categorical 
 
 # ===== CẤU HÌNH (QUAN TRỌNG NHẤT) =====
-DATASET_DIR = r"E:\KHMT\N4K2\DATN\DATASET_LABELED" 
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATASET_DIR = BASE_DIR / "DATASET_LABELED"
+
+print(f"🔍 Đang tìm dữ liệu tại: {DATASET_DIR}")
 
 SAMPLE_RATE = 22050
 DURATION = 3

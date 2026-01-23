@@ -6,10 +6,10 @@ ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 subprocess.run([
     ffmpeg,
     "-y",
-    "-i", "STp2.webm",
+    "-i", "QBBp3.webm",
     "-ac", "2",
     "-ar", "16000",
-    "ST.wav"
+    "QBBp3.wav"
 ], check=True)
 
-print("Convert xong ST.wav")
+print("Convert xong QBBp3.wav")

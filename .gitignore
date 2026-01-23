@@ -11,6 +11,6 @@
 *.pt
 *.pth
 *.ckpt
-
+TrainModel/emotion_model.keras
 # no
-tool.txt
+/TrainModel/whisper_ser_checkpoint

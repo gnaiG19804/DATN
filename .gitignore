@@ -1,16 +1,28 @@
-# Data
-/audio
-/audio_convert
-/data
-/data_final
-/metadata
-/separated
-/SORTED
-/DATASET_LABELED
-# Model
+# ================= DATA =================
+/audio/
+/audio_convert/
+/data/
+/data_final/
+/metadata/
+/separated/
+/SORTED/
+/DATASET_LABELED/
+
+# ================= PYTHON =================
+__pycache__/
+*.pyc
+
+# ================= MODEL / CHECKPOINT =================
 *.pt
 *.pth
 *.ckpt
+*.safetensors
 TrainModel/emotion_model.keras
-# no
-/TrainModel/whisper_ser_checkpoint
+
+# ================= TRAINING ARTIFACTS =================
+TrainModel/whisper_ser_checkpoint/
+TrainModel/whisper_ser_checkpoint_v2/
+TrainModel/**/runs/
+events.out.tfevents*
+
+

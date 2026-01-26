@@ -18,6 +18,9 @@ __pycache__/
 *.ckpt
 *.safetensors
 TrainModel/emotion_model.keras
+TrainModel/train.ipynb
+TrainModel/train_v3_improved .ipynb
+TrainModel/train_v2_improved_colab.ipynb
 
 # ================= TRAINING ARTIFACTS =================
 TrainModel/whisper_ser_checkpoint/

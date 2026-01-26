@@ -8,12 +8,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # Moves up to the parent directory (e.g., E:\KHMT\N4K2\DATN)
 parent_dir = os.path.dirname(current_dir)
 
-AUDIO_FOLDER = os.path.join(parent_dir, "data_final", "final_dataset_3s_5s_QBBp3")
-OUTPUT_CSV = "dataset_metadata_full_QBBp3.csv"
+AUDIO_FOLDER = os.path.join(parent_dir, "data_final", "final_dataset_3s_5s_BDD")
+OUTPUT_CSV = "dataset_metadata_full_BDD.csv"
 
 # Thông tin cứng
-MOVIE_NAME = "Quỳnh búp bê - phần 3"
-Link = "https://www.youtube.com/watch?v=b6qmxYCAiz4"
+MOVIE_NAME = "Biệt dược đen"
+Link = "https://www.youtube.com/watch?v=XiPycGLPPGQ"
 
 # ===== HÀM HỖ TRỢ XỬ LÝ THỜI GIAN =====
 def parse_filename_time(filename):

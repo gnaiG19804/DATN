@@ -9,8 +9,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # Moves up to the parent directory (e.g., E:\KHMT\N4K2\DATN)
 parent_dir = os.path.dirname(current_dir)
 # Constructs the absolute path to the file
-FILE_PATH = os.path.join(parent_dir, "separated", "htdemucs", "CMDAOp2", "vocals.wav")
-OUTPUT_DIR = "raw_cuts_with_time_CMDAOp2"
+FILE_PATH = os.path.join(parent_dir, "separated", "htdemucs", "CTC8NS", "vocals.wav")
+OUTPUT_DIR = "raw_cuts_with_time_CTC8NS"
 
 MIN_SILENCE_LEN = 700   # (ms) Độ dài im lặng tối thiểu để ngắt câu
 KEEP_SILENCE = 100      # (ms) Giữ lại một chút đầu đuôi cho tự nhiên

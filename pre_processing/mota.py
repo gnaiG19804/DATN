@@ -8,12 +8,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # Moves up to the parent directory (e.g., E:\KHMT\N4K2\DATN)
 parent_dir = os.path.dirname(current_dir)
 
-AUDIO_FOLDER = os.path.join(parent_dir, "data_final", "final_dataset_3s_5s_CMDAOp2")
-OUTPUT_CSV = "dataset_metadata_full_CMDAOp2.csv"
+AUDIO_FOLDER = os.path.join(parent_dir, "data_final", "final_dataset_3s_5s_CTC8NS")
+OUTPUT_CSV = "dataset_metadata_full_CTC8NS.csv"
 
 # Thông tin cứng
-MOVIE_NAME = "Cả một đời ân oán phần 2"
-Link = "https://www.youtube.com/watch?v=7K_py0Qn4dQ"
+MOVIE_NAME = "Chúng ta của 8 năm sau"
+Link = "https://www.youtube.com/watch?v=UWG_2m-V1Fo"
 
 
 # ===== HÀM HỖ TRỢ XỬ LÝ THỜI GIAN =====

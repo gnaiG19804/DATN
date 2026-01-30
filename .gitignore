@@ -26,6 +26,8 @@ TrainModel/train_v2_improved_colab.ipynb
 TrainModel/whisper_ser_checkpoint/
 TrainModel/whisper_ser_checkpoint_v2/
 TrainModel/**/runs/
+TrainModel/wavlm_results
+TrainModel/saved_wavlm_emotion_model
 events.out.tfevents*
 
 

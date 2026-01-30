@@ -4,9 +4,9 @@ from pydub import AudioSegment
 from pydub.silence import split_on_silence
 
 # ===== CẤU HÌNH =====
-INPUT_FOLDER = "raw_cuts_with_time_CTC8NS"     
+INPUT_FOLDER = "raw_cuts_with_time_HSCS"     
  # Folder hiện tại của bạn
-OUTPUT_FOLDER = "final_dataset_3s_5s_CTC8NS"    # Folder chứa file thành phẩm
+OUTPUT_FOLDER = "final_dataset_3s_5s_HSCS"    # Folder chứa file thành phẩm
 
 MIN_DURATION = 3000  # 3 giây
 MAX_DURATION = 5000  # 5 giây

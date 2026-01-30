@@ -1,7 +1,9 @@
 conda activate venv
 
+
 tải audio từ video:
-yt-dlp -f bestaudio https://www.youtube.com/watch?v=UWG_2m-V1Fo
+yt-dlp -x --audio-format wav --cookies youtube_cookies.txt --force-ipv4 --extractor-args "youtube:player_client=android" --js-runtimes node --remote-components ejs:github https://www.youtube.com/watch?v=9JV8eB39yZ8
+
 
 chuyển file về dạng .wav:
 python convert_audio.py

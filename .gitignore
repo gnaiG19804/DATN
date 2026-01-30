@@ -29,3 +29,6 @@ TrainModel/**/runs/
 events.out.tfevents*
 
 
+# ================= OTHERS =================
+pre_processing/www.youtube.com_*.txt
+pre_processing/youtube_cookies.txt

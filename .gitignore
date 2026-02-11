@@ -31,7 +31,7 @@ TrainModel/saved_wavlm_emotion_model/
 TrainModel/ecapa_finetune_results/
 TrainModel/saved_wavlm_emotion_model/
 TrainModel/wavlm_results/
-n8n/wav2vec2_checkpoints/
+n8n-custom/wav2vec2_checkpoints/
 events.out.tfevents*
 
 

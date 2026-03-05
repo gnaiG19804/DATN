@@ -909,6 +909,11 @@ def main():
             model, model_name, test_ds, y_te
         )
 
+        # ---- Save final model (v3 update) ----
+        save_path = os.path.join(OUTPUT_DIR, f"final_{model_name.replace('+', '_')}.keras")
+        model.save(save_path)
+        print(f"  [INFO] Saved final trained model to: {save_path}")
+
     # ---- Step 9: Results summary ----
     best_name, best_acc = print_comparison_table(results)
 

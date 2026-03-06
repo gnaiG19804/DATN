@@ -492,19 +492,19 @@ def build_lstm_attention(input_shape, num_classes, lr=1e-3):
 def build_bilstm_attention(input_shape, num_classes, lr=1e-3):
     audio_input = Input(shape=input_shape, name='audio_input')
 
-    x = Bidirectional(LSTM(256, return_sequences=True))(audio_input)
+    x = Bidirectional(LSTM(128, return_sequences=True))(audio_input)
     x = BatchNormalization()(x)
-    x = Dropout(0.4)(x)
+    x = Dropout(0.5)(x)
 
-    x = Bidirectional(LSTM(128, return_sequences=True))(x)
+    x = Bidirectional(LSTM(64, return_sequences=True))(x)
     x = BatchNormalization()(x)
-    x = Dropout(0.4)(x)
+    x = Dropout(0.5)(x)
 
     x = _attention_block(x)
 
-    audio_feat = Dense(256, activation='relu')(x)
+    audio_feat = Dense(128, activation='relu')(x)
     audio_feat = BatchNormalization()(audio_feat)
-    audio_feat = Dropout(0.4)(audio_feat)
+    audio_feat = Dropout(0.5)(audio_feat)
 
     gender_input, gender_feat = _gender_branch()
     output = _classification_head(audio_feat, gender_feat, num_classes)
@@ -518,28 +518,28 @@ def build_cnn_residual(input_shape, num_classes, lr=1e-3):
     audio_input = Input(shape=input_shape, name='audio_input')
 
     # Initial conv
-    x = Conv1D(128, 5, padding='same', activation='relu')(audio_input)
+    x = Conv1D(64, 5, padding='same', activation='relu')(audio_input)
     x = BatchNormalization()(x)
     x = MaxPooling1D(2)(x)
-    x = Dropout(0.25)(x)
+    x = Dropout(0.3)(x)
 
-    # 4 residual blocks with increasing filters
+    # 4 residual blocks
+    x = _residual_block(x, 64)
+    x = Dropout(0.35)(x)
+
     x = _residual_block(x, 128)
-    x = Dropout(0.25)(x)
+    x = MaxPooling1D(2)(x)
+    x = Dropout(0.4)(x)
 
     x = _residual_block(x, 256)
-    x = MaxPooling1D(2)(x)
-    x = Dropout(0.3)(x)
+    x = Dropout(0.4)(x)
 
-    x = _residual_block(x, 512)
-    x = Dropout(0.3)(x)
-
-    x = _residual_block(x, 512)
-    x = Dropout(0.3)(x)
+    x = _residual_block(x, 256)
+    x = Dropout(0.4)(x)
 
     x = GlobalAveragePooling1D()(x)
 
-    audio_feat = Dense(256, activation='relu')(x)
+    audio_feat = Dense(128, activation='relu')(x)
     audio_feat = BatchNormalization()(audio_feat)
     audio_feat = Dropout(0.3)(audio_feat)
 
@@ -559,27 +559,27 @@ def build_crnn_attention(input_shape, num_classes, lr=1e-3):
     audio_input = Input(shape=input_shape, name='audio_input')
 
     # CNN feature extractor
-    x = Conv1D(128, 5, padding='same', activation='relu')(audio_input)
+    x = Conv1D(64, 5, padding='same', activation='relu')(audio_input)
     x = BatchNormalization()(x)
     x = MaxPooling1D(2)(x)
-    x = Dropout(0.25)(x)
+    x = Dropout(0.3)(x)
 
-    x = _residual_block(x, 256)
+    x = _residual_block(x, 128)
     x = MaxPooling1D(2)(x)
-    x = Dropout(0.3)(x)
+    x = Dropout(0.4)(x)
 
-    x = _residual_block(x, 256)
-    x = Dropout(0.3)(x)
+    x = _residual_block(x, 128)
+    x = Dropout(0.4)(x)
 
     # BiLSTM temporal modelling
-    x = Bidirectional(LSTM(128, return_sequences=True))(x)
+    x = Bidirectional(LSTM(64, return_sequences=True))(x)
     x = BatchNormalization()(x)
-    x = Dropout(0.4)(x)
+    x = Dropout(0.5)(x)
 
     # Attention
     x = _attention_block(x)
 
-    audio_feat = Dense(256, activation='relu')(x)
+    audio_feat = Dense(128, activation='relu')(x)
     audio_feat = BatchNormalization()(audio_feat)
     audio_feat = Dropout(0.4)(audio_feat)
 
@@ -610,7 +610,11 @@ def train_model(model, name, train_ds, val_ds, class_weights,
     ckpt_path = os.path.join(OUTPUT_DIR, f"best_{name}.keras")
     log_dir = os.path.join(OUTPUT_DIR, "logs", name)
 
-    callbacks = []
+    callbacks = [
+        # Save ONLY the best weights during the whole 30 epochs
+        ModelCheckpoint(ckpt_path, monitor='val_accuracy', 
+                        save_best_only=True, verbose=1)
+    ]
 
     print(f"\n{'='*60}")
     print(f"  TRAINING: {name}")

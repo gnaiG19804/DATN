@@ -40,7 +40,7 @@ print(f"--- Running on device: {DEVICE} ---")
 torch.set_grad_enabled(False)
 
 # Path to local emotion model
-WAVLM_MODEL_PATH = BASE_DIR.parent / "TrainModel" / "saved_wavlm_emotion_model"
+WAVLM_MODEL_PATH = BASE_DIR.parent / "TrainModel" / "model" / "saved_wavlm_emotion_model"
 
 # ================================
 # MODELS (LAZY LOAD)
@@ -194,6 +194,94 @@ async def download_audio(req: UrlRequest):
 
     return {"status": "ok", "title": title, "link": link, "path": str(wav_path)}
 
+CHUNK_DURATION_SEC = 600   # 10 phút mỗi chunk
+OVERLAP_SEC = 5            # 5 giây overlap giữa các chunk để tránh mất tiếng ở biên
+
+def _get_audio_duration(wav_path: Path) -> float:
+    """Lấy duration (giây) bằng ffprobe, không cần load toàn bộ file."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(wav_path)],
+            capture_output=True, text=True, check=True
+        )
+        return float(r.stdout.strip())
+    except Exception:
+        # Fallback: dùng torchaudio metadata
+        info = torchaudio.info(str(wav_path))
+        return info.num_frames / info.sample_rate
+
+def _split_audio_ffmpeg(wav_path: Path, chunk_dir: Path,
+                        chunk_sec: int, overlap_sec: int) -> list:
+    """Cắt file audio thành các chunk nhỏ bằng ffmpeg (nhanh, không load RAM)."""
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    duration = _get_audio_duration(wav_path)
+
+    chunks = []
+    start = 0
+    idx = 0
+    step = chunk_sec - overlap_sec
+
+    while start < duration:
+        out_file = chunk_dir / f"chunk_{idx:04d}.wav"
+        cmd = [
+            "ffmpeg", "-y", "-i", str(wav_path),
+            "-ss", str(start),
+            "-t", str(chunk_sec),
+            "-ar", "44100",       # giữ SR gốc cho Demucs
+            "-acodec", "pcm_s16le",
+            str(out_file)
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+        chunks.append((out_file, start))
+        start += step
+        idx += 1
+
+    return chunks
+
+def _run_demucs_on_chunk(chunk_path: Path, demucs_out: Path, device: str):
+    """Chạy Demucs trên 1 chunk, fallback CPU nếu GPU OOM."""
+    demucs_cmd = [
+        "demucs",
+        "--two-stems=vocals",
+        "-n", "htdemucs",
+        "--device", device,
+        "--segment", "7",
+        "--jobs", "1",
+        "-o", str(demucs_out),
+        str(chunk_path)
+    ]
+    try:
+        subprocess.run(demucs_cmd, check=True)
+    except subprocess.CalledProcessError:
+        if device == "cuda":
+            print(f"--- GPU OOM on {chunk_path.name}. Falling back to CPU ---")
+            cpu_cmd = demucs_cmd.copy()
+            try:
+                cpu_cmd[cpu_cmd.index("cuda")] = "cpu"
+            except ValueError:
+                pass
+            subprocess.run(cpu_cmd, check=True)
+        else:
+            raise
+
+def _concat_vocals_with_crossfade(vocal_files: list, output_path: Path,
+                                   overlap_sec: int):
+    """Ghép các file vocals lại, crossfade ở vùng overlap."""
+    from pydub import AudioSegment as AS
+
+    overlap_ms = overlap_sec * 1000
+
+    combined = AS.from_file(str(vocal_files[0]))
+
+    for vf in vocal_files[1:]:
+        next_seg = AS.from_file(str(vf))
+        # crossfade ở vùng overlap
+        fade = min(overlap_ms, len(combined), len(next_seg))
+        combined = combined.append(next_seg, crossfade=fade)
+
+    combined.export(str(output_path), format="wav")
+
 @app.post("/separate_vocals")
 async def separate_vocals(req: TitleRequest):
     title = req.title
@@ -211,53 +299,71 @@ async def separate_vocals(req: TitleRequest):
     TMP.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"--- Starting Demucs for: {title} on {DEVICE} ---")
+    duration = _get_audio_duration(wav_path)
+    print(f"--- Starting Demucs for: {title} on {DEVICE} (duration={duration:.0f}s) ---")
 
     try:
-        # Giảm --segments xuống (mặc định cho htdemucs là 40s) để tiết kiệm VRAM
-        # Ví dụ: --segments 10
-        demucs_cmd = [
-            "demucs",
-            "--two-stems=vocals",
-            "-n", "htdemucs",
-            "--device", DEVICE,
-            "--segment", "7", 
-            "--jobs", "1",
-            "-o", str(TMP),
-            str(wav_path)
-        ]
-        
-        try:
-            subprocess.run(demucs_cmd, check=True)
-        except subprocess.CalledProcessError:
-            if DEVICE == "cuda":
-                print("--- GPU OOM or Error. FALLING BACK TO CPU... This will be slow but more stable. ---")
-                # Create a new list for CPU run to avoid index issues
-                cpu_cmd = demucs_cmd.copy()
-                try:
-                    idx = cpu_cmd.index("cuda")
-                    cpu_cmd[idx] = "cpu"
-                except ValueError:
-                    pass 
-                subprocess.run(cpu_cmd, check=True)
-            else:
-                raise
+        if duration <= CHUNK_DURATION_SEC:
+            # ---- File ngắn: xử lý trực tiếp như cũ ----
+            _run_demucs_on_chunk(wav_path, TMP, DEVICE)
+
+            demucs_song_folder_name = wav_path.stem
+            generated_vocals = TMP / "htdemucs" / demucs_song_folder_name / "vocals.wav"
+
+            if not generated_vocals.exists():
+                found = list(TMP.glob("**/vocals.wav"))
+                if found:
+                    generated_vocals = found[0]
+                else:
+                    raise HTTPException(status_code=500,
+                                        detail="Demucs finished but vocals file not found")
+
+            shutil.move(str(generated_vocals), str(vocals_out))
+
+        else:
+            # ---- File dài: chia chunk → xử lý từng chunk → ghép lại ----
+            chunk_dir = TMP / "_chunks"
+            chunks = _split_audio_ffmpeg(wav_path, chunk_dir,
+                                         CHUNK_DURATION_SEC, OVERLAP_SEC)
+            print(f"--- Split into {len(chunks)} chunks ---")
+
+            vocal_parts = []
+            for i, (chunk_path, _start) in enumerate(chunks):
+                print(f"--- Processing chunk {i+1}/{len(chunks)}: {chunk_path.name} ---")
+                demucs_chunk_out = TMP / f"_demucs_chunk_{i:04d}"
+                demucs_chunk_out.mkdir(parents=True, exist_ok=True)
+
+                _run_demucs_on_chunk(chunk_path, demucs_chunk_out, DEVICE)
+
+                # Tìm vocals output
+                vocal_file = demucs_chunk_out / "htdemucs" / chunk_path.stem / "vocals.wav"
+                if not vocal_file.exists():
+                    found = list(demucs_chunk_out.glob("**/vocals.wav"))
+                    if found:
+                        vocal_file = found[0]
+                    else:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Demucs chunk {i} finished but vocals not found")
+
+                vocal_parts.append(vocal_file)
+
+                # Xoá chunk input để tiết kiệm ổ đĩa
+                chunk_path.unlink(missing_ok=True)
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # Ghép tất cả vocal parts lại
+            print(f"--- Concatenating {len(vocal_parts)} vocal parts ---")
+            _concat_vocals_with_crossfade(vocal_parts, vocals_out, OVERLAP_SEC)
+
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"demucs process failed: {str(e)}")
 
-    demucs_song_folder_name = wav_path.stem
-    generated_vocals = TMP / "htdemucs" / demucs_song_folder_name / "vocals.wav"
-
-    if not generated_vocals.exists():
-        found = list(TMP.glob("**/vocals.wav"))
-        if found:
-            generated_vocals = found[0]
-        else:
-            raise HTTPException(status_code=500, detail="Demucs finished but vocals file not found")
-
-    shutil.move(str(generated_vocals), str(vocals_out))
     shutil.rmtree(TMP, ignore_errors=True)
-    
+    print(f"--- Finished Demucs: {vocals_out} ---")
+
     return {"status": "ok", "title": title, "vocals_path": str(vocals_out)}
 
 @app.post("/split_segments")

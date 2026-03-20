@@ -3,9 +3,9 @@ import csv
 import shutil
 
 # ===== CẤU HÌNH (Bạn chỉnh lại cho đúng tên file/thư mục của bạn) =====
-CSV_PATH = "DataLabel/metadata - dataset_metadata_NNKQ.csv"       # Tên file CSV bạn vừa sửa xong
-SOURCE_FOLDER = "data_final/final_3to5s_NNKQ"   # Thư mục chứa tất cả các file âm thanh lộn xộn
-OUTPUT_DIR = "SORTED_BY_EMOTION_NNKQ"          # Thư mục đích (Code sẽ tự tạo)
+CSV_PATH = "DataLabel/PHD.csv"       # Tên file CSV bạn vừa sửa xong
+SOURCE_FOLDER = "n8n-custom/data/PHD/final_3to5s"   # Thư mục chứa tất cả các file âm thanh lộn xộn
+OUTPUT_DIR = "SORTED_BY_PHD"          # Thư mục đích (Code sẽ tự tạo)
 
 # ===== XỬ LÝ =====
 # 1. Tạo thư mục đích

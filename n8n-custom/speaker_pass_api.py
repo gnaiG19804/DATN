@@ -9,31 +9,33 @@ from speechbrain.inference.speaker import EncoderClassifier
 from transformers import pipeline as hf_pipeline
 
 # ================================
-# GLOBAL CONFIG
+# CONFIG
 # ================================
 
 torch.set_grad_enabled(False)
 
+TARGET_SR = 16000
+CHUNK_SEC = 20      # mỗi đoạn 20s
+HOP_SEC = 15        # overlap để không mất tín hiệu
+
+BASE_DIR = os.path.dirname(__file__)
+
 WAVLM_MODEL_PATH = os.path.join(
-    os.path.dirname(__file__),
+    BASE_DIR,
     "..",
     "TrainModel",
     "saved_wavlm_emotion_model"
 )
 
-# ================================
-# FASTAPI
-# ================================
-
 app = FastAPI()
-
-# ================================
-# MODELS (LAZY LOAD)
-# ================================
 
 spk_model = None
 emotion_model = None
 
+
+# ================================
+# MODEL LOAD
+# ================================
 
 def get_spk_model():
     global spk_model
@@ -54,15 +56,14 @@ def get_emotion_model():
             "audio-classification",
             model=WAVLM_MODEL_PATH,
             device=0 if torch.cuda.is_available() else -1,
-            top_k=5,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+            top_k=5
         )
         print("Emotion model ready")
     return emotion_model
 
 
 # ================================
-# INPUT MODEL
+# INPUT
 # ================================
 
 class AudioPath(BaseModel):
@@ -70,35 +71,50 @@ class AudioPath(BaseModel):
 
 
 # ================================
-# AUDIO UTIL
+# AUDIO UTILS
 # ================================
 
 def to_mono_16k(wav, sr):
+
     if wav.shape[0] > 1:
         wav = torch.mean(wav, dim=0, keepdim=True)
-    if sr != 16000:
-        wav = torchaudio.functional.resample(wav, sr, 16000)
+
+    if sr != TARGET_SR:
+        wav = torchaudio.functional.resample(wav, sr, TARGET_SR)
+
     return wav
 
 
-def trim_silence(wav, thr=0.01):
-    e = wav.abs()
-    mask = e > thr
-    if mask.any():
-        idx = mask.nonzero()
-        return wav[:, idx[0,1]:idx[-1,1]]
-    return wav
+def split_audio_chunks(wav):
+
+    chunk = TARGET_SR * CHUNK_SEC
+    hop = TARGET_SR * HOP_SEC
+
+    chunks = []
+
+    for i in range(0, wav.shape[1], hop):
+
+        part = wav[:, i:i+chunk]
+
+        if part.shape[1] < TARGET_SR*5:
+            continue
+
+        chunks.append(part)
+
+    return chunks
 
 
 # ================================
-# SPEAKER — MULTI SIGNAL ENGINE
+# SPEAKER CHECK
 # ================================
 
 vad = webrtcvad.Vad(2)
 
 
 def speaker_similarity(wav):
+
     model = get_spk_model()
+
     L = wav.shape[1]
 
     if L < 32000:
@@ -112,51 +128,8 @@ def speaker_similarity(wav):
         b.squeeze(),
         dim=0
     )
+
     return float(sim)
-
-
-def vad_ratio(wav):
-    x = (wav.squeeze().numpy()*32768).astype(np.int16)
-    sr = 16000
-    frame = int(sr*0.03)
-
-    s = t = 0
-    for i in range(0, len(x)-frame, frame):
-        if vad.is_speech(x[i:i+frame].tobytes(), sr):
-            s += 1
-        t += 1
-
-    return s/t if t else 0
-
-
-def energy_var(wav):
-    x = wav.squeeze().numpy()
-    frame = 400
-    hop = 200
-    e = [np.mean(np.abs(x[i:i+frame])) for i in range(0,len(x)-frame,hop)]
-    return float(np.std(e)) if len(e)>1 else 0
-
-
-def speaker_pass_decision(wav):
-
-    sim = speaker_similarity(wav)
-    vr = vad_ratio(wav)
-    ev = energy_var(wav)
-
-    if sim < 0.58:
-        return False, sim, vr, ev, 0
-
-    score = 0
-
-    if sim > .80: score += 4
-    elif sim > .70: score += 3
-    elif sim > .62: score += 2
-    else: score += 1
-
-    if vr > .6: score += 1
-    if ev < .075: score += 1
-
-    return score >= 4, sim, vr, ev, score
 
 
 # ================================
@@ -171,39 +144,27 @@ LABEL_MAP = {
     "SAD": "sadness"
 }
 
-CALIB = {
-    "ANG":1.0,
-    "ANX":1.8,
-    "HAP":1.8,
-    "NEU":0.7,
-    "SAD":1.0
-}
 
-
-def calibrated_emotion(path):
+def detect_emotion(wav):
 
     clf = get_emotion_model()
-    raw = clf(path)
 
-    adj = []
-    for r in raw:
-        w = CALIB.get(r["label"],1)
-        adj.append({"label":r["label"], "score":r["score"]*w})
+    raw = clf({
+        "array": wav.squeeze().numpy(),
+        "sampling_rate": TARGET_SR
+    })
 
-    tot = sum(r["score"] for r in adj)
-    for r in adj:
-        r["score"] /= tot
+    raw.sort(key=lambda x: x["score"], reverse=True)
 
-    adj.sort(key=lambda x:x["score"], reverse=True)
+    top = raw[0]
 
-    top = adj[0]
     label = LABEL_MAP.get(top["label"], top["label"])
 
-    return label, float(top["score"]), adj
+    return label, float(top["score"])
 
 
 # ================================
-# API
+# MAIN ANALYSIS
 # ================================
 
 @app.post("/analyze-audio")
@@ -212,51 +173,58 @@ async def analyze_audio(data: AudioPath):
     path = data.path.replace("\\","/")
 
     if not os.path.exists(path):
-        return {
-            "pass": False,
-            "should_delete": True,
-            "reason": "file_not_found",
-            "path": path
-        }
+        return {"error": "file_not_found"}
 
     wav, sr = torchaudio.load(path)
+
     wav = to_mono_16k(wav, sr)
-    wav = trim_silence(wav)
 
-    ok, sim, vr, ev, sc = speaker_pass_decision(wav)
+    chunks = split_audio_chunks(wav)
 
-    if not ok:
-        return {
-            "pass": False,
-            "should_delete": True,
-            "reason": "multi_speaker",
-            "path": path,
-            "speaker": {
-                "similarity": sim,
-                "vad": vr,
-                "energy_var": ev,
-                "score": sc
-            }
-        }
+    emotions = []
+    speakers = []
 
-    emo, conf, dist = calibrated_emotion(path)
+    for chunk in chunks:
+
+        sim = speaker_similarity(chunk)
+
+        emo, conf = detect_emotion(chunk)
+
+        emotions.append((emo, conf))
+
+        speakers.append(sim)
+
+        del chunk
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # emotion voting
+    emo_count = {}
+
+    for e,_ in emotions:
+        emo_count[e] = emo_count.get(e,0) + 1
+
+    final_emotion = max(emo_count, key=emo_count.get)
+
+    avg_speaker = float(np.mean(speakers))
 
     return {
-        "pass": True,
-        "should_delete": False,
-        "emotion": emo,
-        "confidence": conf,
-        "path": path,
-        "speaker": {
-            "similarity": sim,
-            "vad": vr,
-            "energy_var": ev,
-            "score": sc
-        }
+        "emotion": final_emotion,
+        "speaker_similarity": avg_speaker,
+        "segments": len(chunks)
     }
+
+
+# ================================
+# DELETE FILE
+# ================================
+
 @app.post("/delete-file")
 async def delete_file(data: AudioPath):
+
     if os.path.exists(data.path):
         os.remove(data.path)
-        return {"deleted":True}
-    return {"deleted":False}
+        return {"deleted": True}
+
+    return {"deleted": False}

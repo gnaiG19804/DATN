@@ -38,6 +38,10 @@ n8n-custom/data
 events.out.tfevents*
 TrainModel/trainv1
 TrainModel/model
+TrainModel/scaler.pkl
+TrainModel/best_model.keras
+TrainModel/emotion_model.keras
+TrainModel/output_optimized/
 # ================= OTHERS =================
 pre_processing/www.youtube.com_*.txt
 pre_processing/youtube_cookies.txt

@@ -1,50 +1,46 @@
+# =========================================================
+# SER FINAL FIXED (BALANCE + MFCC + BETTER VOTING)
+# =========================================================
 
 import os
 import glob
-import numpy as np
 import random
+import json
+from datetime import datetime
+
+import numpy as np
 import librosa
 import joblib
 import tensorflow as tf
 
-# Fix GPU memory — chỉ dùng đúng lượng VRAM cần thiết
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-import matplotlib
-matplotlib.use('Agg')  # non-interactive backend
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
+from collections import defaultdict
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import classification_report, confusion_matrix
 
+from tensorflow.keras.layers import *
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
-    Input, Dense, LSTM, Dropout, BatchNormalization,
-    Bidirectional, GlobalAveragePooling1D, GaussianNoise
-)
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.callbacks import *
+from tensorflow.keras.utils import to_categorical
 
-# =============================================================================
+# =========================================================
 # CONFIG
-# =============================================================================
-DATASET_PATH = "../DATASET_LABELED"
+# =========================================================
+DATASET_PATH = r"E:\KHMT\N4K2\DATN\DATASET_LABELED"
+RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
 
 SAMPLE_RATE = 16000
-DURATION = 4.0
-HOP_LENGTH = 512
+WINDOW = 1.5
+STEP = 0.75
 
-BATCH_SIZE = 16
+N_MELS = 64
+MAX_LEN = 128
+
+BATCH_SIZE = 32
 EPOCHS = 50
-LR = 3e-4
+LR = 2e-4
 
 EMOTION_MAP = {
     "ANG": 0,
@@ -57,185 +53,142 @@ EMOTION_MAP = {
 NUM_CLASSES = len(EMOTION_MAP)
 EMOTION_LABELS = list(EMOTION_MAP.keys())
 
-# Thư mục lưu kết quả
-RESULTS_DIR = "results"
-
-
-# =============================================================================
+# =========================================================
 # AUDIO
-# =============================================================================
-def pad_audio(y):
-    target_len = int(SAMPLE_RATE * DURATION)
-    if len(y) > target_len:
-        return y[:target_len]
-    return np.pad(y, (0, target_len - len(y)))
-
-
+# =========================================================
 def load_audio(path):
     y, _ = librosa.load(path, sr=SAMPLE_RATE)
-    y, _ = librosa.effects.trim(y, top_db=25)
-    return pad_audio(y)
+    y, _ = librosa.effects.trim(y)
+    return y
 
+def split_audio(y):
+    win_len = int(WINDOW * SAMPLE_RATE)
+    step_len = int(STEP * SAMPLE_RATE)
 
-# =============================================================================
-# FEATURE EXTRACTION (FIXED)
-# =============================================================================
+    if len(y) < win_len:
+        y = np.pad(y, (0, win_len - len(y)))
+        return [y]
+
+    segments = []
+    for i in range(0, len(y) - win_len + 1, step_len):
+        segments.append(y[i:i+win_len])
+
+    return segments
+
+# =========================================================
+# FEATURE (MEL + MFCC)
+# =========================================================
 def extract_features(y):
-    zcr = librosa.feature.zero_crossing_rate(y, hop_length=HOP_LENGTH)
-    rms = librosa.feature.rms(y=y, hop_length=HOP_LENGTH)
+    mel = librosa.feature.melspectrogram(y=y, sr=SAMPLE_RATE, n_mels=N_MELS)
+    mel = librosa.power_to_db(mel)
 
-    mfcc = librosa.feature.mfcc(y=y, sr=SAMPLE_RATE, n_mfcc=20, hop_length=HOP_LENGTH)
-    delta = librosa.feature.delta(mfcc)
-    delta2 = librosa.feature.delta(mfcc, order=2)
+    mfcc = librosa.feature.mfcc(y=y, sr=SAMPLE_RATE, n_mfcc=20)
 
-    mel = librosa.feature.melspectrogram(y=y, sr=SAMPLE_RATE, n_mels=40, hop_length=HOP_LENGTH)
-    mel_db = librosa.power_to_db(mel)
+    feat = np.concatenate([mel, mfcc], axis=0).T
 
-    # FIX: đảm bảo cùng hop_length
-    f0, _, _ = librosa.pyin(y, fmin=50, fmax=300, hop_length=HOP_LENGTH)
-    f0 = np.nan_to_num(f0)
+    if feat.shape[0] > MAX_LEN:
+        feat = feat[:MAX_LEN]
+    else:
+        pad = MAX_LEN - feat.shape[0]
+        feat = np.pad(feat, ((0, pad), (0, 0)))
 
-    if np.std(f0) > 0:
-        f0 = (f0 - np.mean(f0)) / (np.std(f0) + 1e-6)
+    return feat
 
-    f0 = f0.reshape(1, -1)
-
-    # đảm bảo cùng time length
-    min_len = min(
-        zcr.shape[1], rms.shape[1], mfcc.shape[1],
-        mel_db.shape[1], f0.shape[1]
-    )
-
-    zcr = zcr[:, :min_len]
-    rms = rms[:, :min_len]
-    mfcc = mfcc[:, :min_len]
-    delta = delta[:, :min_len]
-    delta2 = delta2[:, :min_len]
-    mel_db = mel_db[:, :min_len]
-    f0 = f0[:, :min_len]
-
-    features = np.concatenate([
-        zcr, rms,
-        mfcc, delta, delta2,
-        mel_db,
-        f0
-    ], axis=0)
-
-    return features.T
-
-
-# =============================================================================
-# AUGMENTATION
-# =============================================================================
+# =========================================================
+# AUGMENT
+# =========================================================
 def augment(y):
-    # Noise injection
-    if random.random() < 0.5:
-        noise_level = np.random.uniform(0.005, 0.025)
-        y = y + noise_level * np.random.randn(len(y))
+    if random.random() < 0.7:
+        y += 0.02 * np.random.randn(len(y))
 
-    # Time stretch
-    if random.random() < 0.5:
-        rate = np.random.uniform(0.9, 1.1)
-        y = librosa.effects.time_stretch(y, rate=rate)
+    if random.random() < 0.7:
+        y = librosa.effects.pitch_shift(y, sr=SAMPLE_RATE, n_steps=random.uniform(-3, 3))
 
-    # Time shift
-    if random.random() < 0.4:
-        shift = int(np.random.uniform(-0.1, 0.1) * len(y))
-        y = np.roll(y, shift)
+    if random.random() < 0.7:
+        y = librosa.effects.time_stretch(y, rate=random.uniform(0.8, 1.2))
 
-    # Pitch shift
-    if random.random() < 0.3:
-        n_steps = np.random.uniform(-1.5, 1.5)
-        y = librosa.effects.pitch_shift(y, sr=SAMPLE_RATE, n_steps=n_steps)
+    return y
 
-    # Volume change
-    if random.random() < 0.4:
-        gain = np.random.uniform(0.8, 1.2)
-        y = y * gain
-
-    return pad_audio(y)
-
-
-# =============================================================================
-# LOAD DATA (FIXED)
-# =============================================================================
+# =========================================================
+# LOAD DATA
+# =========================================================
 def load_data():
-    X, y, files = [], [], []
-
-    abs_path = os.path.abspath(DATASET_PATH)
-    print(f"  Dataset path: {abs_path}")
-    print(f"  Exists: {os.path.isdir(abs_path)}")
+    X, y, groups = [], [], []
 
     for emo, idx in EMOTION_MAP.items():
-        folder = os.path.join(DATASET_PATH, emo)
-        wav_files = glob.glob(folder + "/*.wav")
-        print(f"  [{emo}] {folder} → {len(wav_files)} files")
+        files = glob.glob(os.path.join(DATASET_PATH, emo, "*.wav"))
+        print(f"{emo}: {len(files)} files")
 
-        for file in wav_files:
-            try:
-                audio = load_audio(file)
-                feat = extract_features(audio)
+        for f in files:
+            audio = load_audio(f)
+            segments = split_audio(audio)
+
+            for seg in segments:
+                feat = extract_features(seg)
 
                 X.append(feat)
                 y.append(idx)
-                files.append(file)
+                groups.append(f)
 
-            except Exception as e:
-                print(f"[WARN] {file}: {e}")
+                if random.random() < 0.5:
+                    seg_aug = augment(seg)
+                    feat_aug = extract_features(seg_aug)
 
-    return np.array(X), np.array(y, dtype=int), files
+                    X.append(feat_aug)
+                    y.append(idx)
+                    groups.append(f)
 
+    return np.array(X), np.array(y), np.array(groups)
 
-# =============================================================================
-# BALANCE (FIXED)
-# =============================================================================
-def balance_data(X, y, files):
-    max_count = max(np.bincount(y))
-    target = int(max_count * 0.7)
+# =========================================================
+# BALANCE DATA (KEY FIX)
+# =========================================================
+def balance_dataset(X, y, groups):
+    class_data = defaultdict(list)
 
-    X_new, y_new = [], []
+    for xi, yi, gi in zip(X, y, groups):
+        class_data[yi].append((xi, yi, gi))
 
-    for c in range(NUM_CLASSES):
-        idxs = np.where(y == c)[0]
+    max_count = max(len(v) for v in class_data.values())
 
-        # keep original
-        for i in idxs:
-            X_new.append(X[i])
-            y_new.append(c)
+    X_new, y_new, g_new = [], [], []
 
-        # augment
-        needed = max(0, target - len(idxs))
+    for cls in class_data:
+        samples = class_data[cls]
 
-        for _ in range(needed):
-            i = random.choice(idxs)
-            audio = load_audio(files[i])
-            audio = augment(audio)
-            feat = extract_features(audio)
+        while len(samples) < max_count:
+            samples.append(random.choice(samples))
 
-            X_new.append(feat)
-            y_new.append(c)
+        for xi, yi, gi in samples:
+            X_new.append(xi)
+            y_new.append(yi)
+            g_new.append(gi)
 
-    return np.array(X_new), np.array(y_new)
+    return np.array(X_new), np.array(y_new), np.array(g_new)
 
-
-# =============================================================================
-# MODEL
-# =============================================================================
+# =========================================================
+# MODEL (STRONGER)
+# =========================================================
 def build_model(input_shape):
     inp = Input(shape=input_shape)
 
-    x = Bidirectional(LSTM(64, return_sequences=True))(inp)
+    x = Conv1D(64, 5, padding='same', activation='relu')(inp)
     x = BatchNormalization()(x)
+    x = MaxPooling1D(2)(x)
     x = Dropout(0.3)(x)
 
-    x = Bidirectional(LSTM(32, return_sequences=True))(x)
+    x = Conv1D(128, 5, padding='same', activation='relu')(x)
     x = BatchNormalization()(x)
+    x = MaxPooling1D(2)(x)
     x = Dropout(0.3)(x)
+
+    x = Bidirectional(LSTM(64, return_sequences=True))(x)
+    x = Dropout(0.5)(x)
 
     x = GlobalAveragePooling1D()(x)
 
-    x = Dense(64, activation='relu')(x)
-    x = Dropout(0.3)(x)
+    x = Dense(128, activation='relu')(x)
+    x = Dropout(0.5)(x)
 
     out = Dense(NUM_CLASSES, activation='softmax')(x)
 
@@ -243,241 +196,137 @@ def build_model(input_shape):
 
     model.compile(
         optimizer=Adam(LR),
-        loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.02),
+        loss=tf.keras.losses.CategoricalCrossentropy(),
         metrics=['accuracy']
     )
 
     return model
 
-
-# =============================================================================
-# SAVE RESULTS
-# =============================================================================
-def save_training_history(history, results_dir):
-    """Lưu biểu đồ Loss và Accuracy theo epoch."""
-
-    # --- Loss ---
-    plt.figure(figsize=(10, 5))
-    plt.plot(history.history['loss'], label='Train Loss', linewidth=2)
-    plt.plot(history.history['val_loss'], label='Val Loss', linewidth=2)
-    plt.title('Training & Validation Loss', fontsize=14)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, 'loss_curve.png'), dpi=150)
-    plt.close()
-    print(f"  ✓ Saved loss_curve.png")
-
-    # --- Accuracy ---
-    plt.figure(figsize=(10, 5))
-    plt.plot(history.history['accuracy'], label='Train Accuracy', linewidth=2)
-    plt.plot(history.history['val_accuracy'], label='Val Accuracy', linewidth=2)
-    plt.title('Training & Validation Accuracy', fontsize=14)
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, 'accuracy_curve.png'), dpi=150)
-    plt.close()
-    print(f"  ✓ Saved accuracy_curve.png")
-
-
-def save_confusion_matrix(y_true, y_pred, results_dir):
-    """Lưu confusion matrix dạng heatmap."""
-    cm = confusion_matrix(y_true, y_pred)
-
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(
-        cm, annot=True, fmt='d', cmap='Blues',
-        xticklabels=EMOTION_LABELS,
-        yticklabels=EMOTION_LABELS
-    )
-    plt.title('Confusion Matrix', fontsize=14)
-    plt.xlabel('Predicted', fontsize=12)
-    plt.ylabel('Actual', fontsize=12)
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, 'confusion_matrix.png'), dpi=150)
-    plt.close()
-    print(f"  ✓ Saved confusion_matrix.png")
-
-    # Normalized confusion matrix (%)
-    cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
-
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(
-        cm_norm, annot=True, fmt='.1f', cmap='Oranges',
-        xticklabels=EMOTION_LABELS,
-        yticklabels=EMOTION_LABELS
-    )
-    plt.title('Confusion Matrix (Normalized %)', fontsize=14)
-    plt.xlabel('Predicted', fontsize=12)
-    plt.ylabel('Actual', fontsize=12)
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, 'confusion_matrix_normalized.png'), dpi=150)
-    plt.close()
-    print(f"  ✓ Saved confusion_matrix_normalized.png")
-
-
-def save_classification_report(y_true, y_pred, results_dir):
-    """Lưu classification report ra file text."""
-    report = classification_report(y_true, y_pred, target_names=EMOTION_LABELS)
-
-    report_path = os.path.join(results_dir, 'classification_report.txt')
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write(f"SER v5.1 — Classification Report\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"{'='*60}\n\n")
-        f.write(report)
-        f.write(f"\n{'='*60}\n")
-
-    print(f"  ✓ Saved classification_report.txt")
-    return report
-
-
-def save_training_summary(history, y_true, y_pred, results_dir):
-    """Lưu tổng hợp kết quả training."""
-    report = classification_report(y_true, y_pred, target_names=EMOTION_LABELS, output_dict=True)
-
-    summary_path = os.path.join(results_dir, 'training_summary.txt')
-    with open(summary_path, 'w', encoding='utf-8') as f:
-        f.write(f"SER v5.1 — Training Summary\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"{'='*60}\n\n")
-
-        # Config
-        f.write(f"[CONFIG]\n")
-        f.write(f"  Sample Rate    : {SAMPLE_RATE}\n")
-        f.write(f"  Duration       : {DURATION}s\n")
-        f.write(f"  Batch Size     : {BATCH_SIZE}\n")
-        f.write(f"  Max Epochs     : {EPOCHS}\n")
-        f.write(f"  Learning Rate  : {LR}\n")
-        f.write(f"  Emotions       : {EMOTION_LABELS}\n\n")
-
-        # Training info
-        actual_epochs = len(history.history['loss'])
-        best_val_loss = min(history.history['val_loss'])
-        best_val_acc = max(history.history['val_accuracy'])
-        final_train_acc = history.history['accuracy'][-1]
-        final_train_loss = history.history['loss'][-1]
-
-        f.write(f"[TRAINING]\n")
-        f.write(f"  Actual Epochs  : {actual_epochs}\n")
-        f.write(f"  Final Train Loss     : {final_train_loss:.4f}\n")
-        f.write(f"  Final Train Accuracy : {final_train_acc:.4f} ({final_train_acc*100:.1f}%)\n")
-        f.write(f"  Best Val Loss        : {best_val_loss:.4f}\n")
-        f.write(f"  Best Val Accuracy    : {best_val_acc:.4f} ({best_val_acc*100:.1f}%)\n\n")
-
-        # Test results
-        test_acc = report['accuracy']
-        f.write(f"[TEST RESULTS]\n")
-        f.write(f"  Test Accuracy  : {test_acc:.4f} ({test_acc*100:.1f}%)\n\n")
-
-        # Per-class results
-        f.write(f"[PER-CLASS RESULTS]\n")
-        f.write(f"  {'Emotion':<10} {'Precision':>10} {'Recall':>10} {'F1-Score':>10} {'Support':>10}\n")
-        f.write(f"  {'-'*50}\n")
-        for emo in EMOTION_LABELS:
-            p = report[emo]['precision']
-            r = report[emo]['recall']
-            f1 = report[emo]['f1-score']
-            sup = report[emo]['support']
-            f.write(f"  {emo:<10} {p:>10.4f} {r:>10.4f} {f1:>10.4f} {sup:>10.0f}\n")
-
-        f.write(f"\n{'='*60}\n")
-        f.write(f"Files saved in: {os.path.abspath(results_dir)}\n")
-
-    print(f"  ✓ Saved training_summary.txt")
-
-
-# =============================================================================
+# =========================================================
 # MAIN
-# =============================================================================
+# =========================================================
 def main():
-    # Tạo thư mục results
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    print(f"Results will be saved to: {os.path.abspath(RESULTS_DIR)}")
-
     print("Loading data...")
-    X, y, files = load_data()
-
-    print(f"  Total samples: {len(y)}")
-    if len(y) == 0:
-        print("ERROR: No data loaded! Check DATASET_PATH.")
-        return
+    X, y, groups = load_data()
 
     print("Balancing data...")
-    X, y = balance_data(X, y, files)
+    X, y, groups = balance_dataset(X, y, groups)
 
-    print("Split...")
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
+    print(f"Total samples: {len(X)}")
+
+    X_train, X_test, y_train, y_test, g_train, g_test = train_test_split(
+        X, y, groups,
+        test_size=0.2,
+        stratify=y,
+        random_state=42
     )
 
-    print("Normalize...")
     scaler = StandardScaler()
-    T, F = X_tr.shape[1], X_tr.shape[2]
+    T, F = X_train.shape[1], X_train.shape[2]
 
-    X_tr = scaler.fit_transform(X_tr.reshape(-1, F)).reshape(-1, T, F)
-    X_te = scaler.transform(X_te.reshape(-1, F)).reshape(-1, T, F)
+    X_train = scaler.fit_transform(X_train.reshape(-1, F)).reshape(-1, T, F)
+    X_test = scaler.transform(X_test.reshape(-1, F)).reshape(-1, T, F)
 
-    joblib.dump(scaler, "scaler.pkl")
+    y_train_oh = to_categorical(y_train)
 
-    y_tr_oh = to_categorical(y_tr)
-    y_te_oh = to_categorical(y_te)
-
-    # class weight
-    weights = compute_class_weight('balanced', classes=np.unique(y_tr), y=y_tr)
-    class_weights = dict(enumerate(weights))
-
-    print("Build model...")
+    print("Building model...")
     model = build_model((T, F))
 
     callbacks = [
-        EarlyStopping(patience=12, restore_best_weights=True, monitor='val_loss'),
-        ModelCheckpoint("best_model.keras", save_best_only=True, monitor='val_loss'),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, verbose=1)
+        EarlyStopping(patience=8, restore_best_weights=True),
+        ReduceLROnPlateau(patience=3)
     ]
 
     print("Training...")
-    history = model.fit(
-        X_tr, y_tr_oh,
+    model.fit(
+        X_train, y_train_oh,
         validation_split=0.1,
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
-        class_weight=class_weights,
         callbacks=callbacks
     )
 
-    model.save("final_model.keras")
+    print("Predicting...")
+    probs = model.predict(X_test)
 
-    print("Evaluate...")
-    preds = np.argmax(model.predict(X_te), axis=1)
+    # =====================================================
+    # VOTING (AVERAGE PROBABILITY)
+    # =====================================================
+    file_probs = defaultdict(list)
 
-    # In ra console
-    report_text = classification_report(y_te, preds, target_names=EMOTION_LABELS)
-    print(report_text)
+    for p, g in zip(probs, g_test):
+        file_probs[g].append(p)
 
-    # =========================================================================
-    # LƯU KẾT QUẢ
-    # =========================================================================
-    print(f"\nSaving results to '{RESULTS_DIR}/'...")
+    final_preds = []
+    final_labels = []
 
-    save_training_history(history, RESULTS_DIR)
-    save_confusion_matrix(y_te, preds, RESULTS_DIR)
-    save_classification_report(y_te, preds, RESULTS_DIR)
-    save_training_summary(history, y_te, preds, RESULTS_DIR)
+    for f in file_probs:
+        avg_prob = np.mean(file_probs[f], axis=0)
+        pred = np.argmax(avg_prob)
 
-    print(f"\n✅ All results saved to: {os.path.abspath(RESULTS_DIR)}/")
-    print(f"   - loss_curve.png")
-    print(f"   - accuracy_curve.png")
-    print(f"   - confusion_matrix.png")
-    print(f"   - confusion_matrix_normalized.png")
-    print(f"   - classification_report.txt")
-    print(f"   - training_summary.txt")
+        label = EMOTION_MAP[os.path.basename(os.path.dirname(f))]
+
+        final_preds.append(pred)
+        final_labels.append(label)
+
+    report = classification_report(final_labels, final_preds, target_names=EMOTION_LABELS)
+    print("\n🔥 FINAL RESULT:")
+    print(report)
+
+    # =====================================================
+    # SAVE RESULTS
+    # =====================================================
+    os.makedirs(RESULT_DIR, exist_ok=True)
+    print(f"\n💾 Saving results to {RESULT_DIR}...")
+
+    # 1. Model
+    model_path = os.path.join(RESULT_DIR, "ser_model.keras")
+    model.save(model_path)
+    print(f"  ✅ Model saved: {model_path}")
+
+    # 2. Scaler
+    scaler_path = os.path.join(RESULT_DIR, "scaler.pkl")
+    joblib.dump(scaler, scaler_path)
+    print(f"  ✅ Scaler saved: {scaler_path}")
+
+    # 3. Classification report
+    report_path = os.path.join(RESULT_DIR, "classification_report.txt")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(report)
+    print(f"  ✅ Report saved: {report_path}")
+
+    # 4. Confusion matrix
+    cm = confusion_matrix(final_labels, final_preds)
+    cm_path = os.path.join(RESULT_DIR, "confusion_matrix.npy")
+    np.save(cm_path, cm)
+    print(f"  ✅ Confusion matrix saved: {cm_path}")
+
+    # 5. Training config
+    config = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "dataset_path": DATASET_PATH,
+        "sample_rate": SAMPLE_RATE,
+        "window": WINDOW,
+        "step": STEP,
+        "n_mels": N_MELS,
+        "max_len": MAX_LEN,
+        "batch_size": BATCH_SIZE,
+        "epochs": EPOCHS,
+        "learning_rate": LR,
+        "num_classes": NUM_CLASSES,
+        "emotion_labels": EMOTION_LABELS,
+        "total_samples": len(X),
+        "train_samples": len(X_train),
+        "test_samples": len(X_test),
+    }
+    config_path = os.path.join(RESULT_DIR, "train_config.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    print(f"  ✅ Config saved: {config_path}")
+
+    print("\n🎉 All results saved!")
 
 
+# =========================================================
 if __name__ == "__main__":
     main()

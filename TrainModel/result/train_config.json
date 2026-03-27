@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-03-27 17:01:43",
+  "dataset_path": "E:\\KHMT\\N4K2\\DATN\\DATASET_LABELED",
+  "sample_rate": 16000,
+  "window": 1.5,
+  "step": 0.75,
+  "n_mels": 64,
+  "max_len": 128,
+  "batch_size": 32,
+  "epochs": 50,
+  "learning_rate": 0.0002,
+  "num_classes": 5,
+  "emotion_labels": [
+    "ANG",
+    "ANX",
+    "HAP",
+    "NEU",
+    "SAD"
+  ],
+  "total_samples": 21580,
+  "train_samples": 17264,
+  "test_samples": 4316
+}

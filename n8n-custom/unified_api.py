@@ -40,7 +40,7 @@ print(f"--- Running on device: {DEVICE} ---")
 torch.set_grad_enabled(False)
 
 # Path to local emotion model
-WAVLM_MODEL_PATH = BASE_DIR.parent / "TrainModel" / "model" / "saved_wavlm_emotion_model"
+WAVLM_MODEL_PATH = Path("E:/KHMT/N4K2/DATN/n8n-custom/saved_wavlm_emotion_model")
 
 # ================================
 # MODELS (LAZY LOAD)

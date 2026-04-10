@@ -3,6 +3,7 @@
 # =========================================================
 
 import os, glob, random
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Fix MKL memory error
 import numpy as np
 import librosa
 import tensorflow as tf
@@ -37,7 +38,7 @@ N_MELS = 128
 MAX_LEN = 150
 MAX_SEGMENTS = 10
 
-BATCH_SIZE = 32
+BATCH_SIZE = 8  # Giảm để tránh tràn RAM khi training
 EPOCHS = 80
 LR = 3e-4
 

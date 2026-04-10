@@ -1,7 +1,0 @@
-tensorflow
-numpy<2.0.0
-scikit-learn
-librosa
-matplotlib
-seaborn
-soundfile

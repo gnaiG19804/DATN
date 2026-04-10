@@ -1,13 +1,13 @@
 # ================= DATA =================
 /audio/
-/audio_convert/
+audio_convert/
 /data/
 /data_final/
 /metadata/
 /separated/
 /SORTED/
 /DATASET_LABELED/
-
+/docs/
 # ================= PYTHON =================
 __pycache__/
 *.pyc
@@ -42,6 +42,23 @@ TrainModel/scaler.pkl
 TrainModel/best_model.keras
 TrainModel/emotion_model.keras
 TrainModel/output_optimized/
+TrainModel/result/
+TrainModel/result1/
+TrainModel/result_v4/
+TrainModel/train_v4.py
 # ================= OTHERS =================
 pre_processing/www.youtube.com_*.txt
 pre_processing/youtube_cookies.txt
+
+
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.env
+dist/
+build/
+.next/
+.vscode/
+.idea/
+paper_text/
